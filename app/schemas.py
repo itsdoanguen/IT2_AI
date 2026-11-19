@@ -19,6 +19,7 @@ class VectorSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50, description="Số lượng chunks trả về tối đa")
     min_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Ngưỡng cosine similarity tối thiểu")
     filters: Optional[VectorSearchFilters] = Field(default=None, description="Bộ lọc metadata tùy chọn")
+    check_guardrail: bool = Field(default=True, description="Bật kiểm tra Intent Router Guardrail trước khi truy xuất")
 
     @field_validator("query")
     @classmethod
@@ -65,6 +66,36 @@ class VectorSearchResponse(BaseModel):
     embedding_model: str
     context: str = Field(default="", description="Ngữ cảnh gộp sẵn từ các chunks tìm được cho RAG LLM")
     results: list[VectorSearchChunk]
+    blocked: bool = Field(default=False, description="True nếu câu hỏi bị Guardrail chặn")
+    guardrail_category: Optional[str] = Field(default=None, description="Loại vi phạm/ngoài luồng nếu bị chặn")
+    guardrail_reason: Optional[str] = Field(default=None, description="Lý do phân loại của Guardrail")
+    refusal_message: Optional[str] = Field(default=None, description="Thông điệp từ chối an toàn trả về cho người dùng")
+
+
+class GuardrailRequest(BaseModel):
+    """Request payload for POST /api/guardrail."""
+
+    query: str = Field(..., min_length=1, max_length=1000, description="Câu hỏi cần kiểm tra trước khi chạy RAG")
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("query không được để trống")
+        return cleaned
+
+
+class GuardrailResponse(BaseModel):
+    """Response payload for POST /api/guardrail."""
+
+    query: str
+    allowed: bool
+    intent: str
+    category: Optional[str] = None
+    reason: str
+    refusal_message: Optional[str] = None
+    latency_ms: float
 
 
 class HealthResponse(BaseModel):
