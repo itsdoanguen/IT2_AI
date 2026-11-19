@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,id=it2-ai-pip,target=/root/.cache/pip \
     pip install --extra-index-url https://download.pytorch.org/whl/cpu torch -r requirements.txt
 
 # Pre-bake embedding model weights into the image so container cold-starts stay fast.
