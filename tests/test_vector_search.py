@@ -245,3 +245,91 @@ def test_guardrail_allows_dut_academic_queries(tmp_path: Path) -> None:
             body = res.json()
             assert body["allowed"] is True
             assert body["latency_ms"] < 50.0
+
+
+def test_hybrid_search_handles_ocr_slips_and_document_diversity(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+    from app.config import Settings
+    from app.main import create_app
+    from app.vector_store import VectorStoreService, build_chunk_metadata
+
+    extra_samples = [
+        {
+            "chunk_id": f"0505_dieu_{i}",
+            "document_id": "0505",
+            "document_number": "05/2022/QĐ-TTg",
+            "document_title": "Tín dụng đối với học sinh sinh viên trả nợ vay vốn",
+            "field": "Công tác sinh viên",
+            "issuer": "Thủ tướng Chính phủ",
+            "status": "Còn hiệu lực",
+            "chapter_title": "",
+            "article_number": f"Điều {i}",
+            "article_title": "Trả nợ vay",
+            "clause_number": "1",
+            "content": "Mức vay vốn tối đa và thời hạn trả nợ đối với sinh viên.",
+            "full_rag_text": f"[VĂN BẢN: 05/2022/QĐ-TTg] Điều {i}: Thời hạn trả nợ vốn vay học sinh sinh viên.",
+            "token_count_estimate": 40,
+        }
+        for i in range(1, 5)
+    ] + [
+        {
+            "chunk_id": "0147_dieu_11",
+            "document_id": "0147",
+            "document_number": "08/2021/TT-BGDĐT",
+            "document_title": "Quy chế đào tạo trình độ đại học",
+            "field": "Đào tạo",
+            "issuer": "Bộ Giáo dục và Đào tạo",
+            "status": "Còn hiệu lực",
+            "chapter_title": "",
+            "article_number": "Điều 11",
+            "article_title": "Xử lý kết quả học tập",
+            "clause_number": "1",
+            "content": "Cuối mỗi học kỳ chính, sinh viên bị cảnh báo học tập hoặc buộc thôi học khi số tín chỉ không đạt vượt ngưỡng.",
+            "full_rag_text": "[VĂN BẢN: 08/2021/TT-BGDĐT] Điều 11: Sinh viên nợ tín chỉ vượt ngưỡng sẽ bị cảnh báo học tập hoặc buộc thôi học.",
+            "token_count_estimate": 45,
+        },
+        {
+            "chunk_id": "0416_dieu_20",
+            "document_id": "0416",
+            "document_number": "1214/QĐ-ĐHBK",
+            "document_title": "Quy định đào tạo trình độ Đại học",
+            "field": "Đào tạo",
+            "issuer": "Trường ĐHBK",
+            "status": "Còn hiệu lực",
+            "chapter_title": "",
+            "article_number": "Điều 20",
+            "article_title": "Cảnh báo học tập",
+            "clause_number": "1",
+            "content": "Sinh viên n9 t1n ch1 bị canh bao hoc tap hoac buc thoi h9c nếu vi phạm khối lượng học tập.",
+            "full_rag_text": "[VĂN BẢN: 1214/QĐ-ĐHBK] Điều 20: Cảnh báo học tập và buoc thoi hoc do no t1n chi.",
+            "token_count_estimate": 40,
+        },
+    ]
+
+    persist_dir = tmp_path / "chroma_hybrid"
+    store = VectorStoreService(
+        app_settings=Settings(CHROMA_PERSIST_DIR=str(persist_dir)),
+        persist_dir=persist_dir,
+        embedding_function=KeywordEmbeddingFunction(),
+    )
+    store.initialize()
+    store.collection.upsert(
+        ids=[s["chunk_id"] for s in extra_samples],
+        documents=[s["full_rag_text"] for s in extra_samples],
+        metadatas=[build_chunk_metadata(s) for s in extra_samples],
+    )
+
+    app = create_app(vector_store=store)
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/search",
+            json={"query": "nợ tín chỉ bị cảnh báo học tập hoặc buộc thôi học", "top_k": 4},
+        )
+        assert res.status_code == 200
+        results = res.json()["results"]
+        assert len(results) == 4
+        doc_nums = [item["metadata"]["document_number"] for item in results]
+        assert "08/2021/TT-BGDĐT" in doc_nums[:2]
+        assert "1214/QĐ-ĐHBK" in doc_nums[:2]
+        assert doc_nums.count("05/2022/QĐ-TTg") <= 2
+
