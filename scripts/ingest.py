@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Delete existing collection before ingesting (required if changing embedding model)",
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip chunk IDs already present in the ChromaDB collection",
+    )
     return parser.parse_args()
 
 
@@ -139,7 +144,24 @@ def main() -> None:
         metadata={"hnsw:space": "cosine"},
     )
 
-    print(f"[3/4] Upserting {len(ids)} chunks into '{persist_dir}' (batch_size={args.batch_size})...")
+    if args.skip_existing and not args.reset:
+        existing_ids = set(collection.get(include=[])["ids"])
+        if existing_ids:
+            filtered = [
+                (cid, doc, meta)
+                for cid, doc, meta in zip(ids, documents, metadatas)
+                if cid not in existing_ids
+            ]
+            skipped = len(ids) - len(filtered)
+            ids = [x[0] for x in filtered]
+            documents = [x[1] for x in filtered]
+            metadatas = [x[2] for x in filtered]
+            print(f"      Skipped {skipped} already-indexed chunks; {len(ids)} remaining.")
+            if not ids:
+                print(f"[4/4] All selected chunks already exist ({collection.count()} total).")
+                return
+
+    print(f"[3/4] Upserting {len(ids)} chunks into '{persist_dir}' (batch_size={args.batch_size})...", flush=True)
     total_batches = (len(ids) + args.batch_size - 1) // args.batch_size
     for idx in range(0, len(ids), args.batch_size):
         batch_num = idx // args.batch_size + 1
@@ -150,9 +172,9 @@ def main() -> None:
         )
         if batch_num % 5 == 0 or batch_num == total_batches:
             elapsed = time.perf_counter() - t0
-            print(f"      Batch {batch_num}/{total_batches} done ({elapsed:.1f}s)")
+            print(f"      Batch {batch_num}/{total_batches} done ({elapsed:.1f}s)", flush=True)
 
-    print(f"[4/4] Completed! Collection '{settings.CHROMA_COLLECTION_NAME}' now holds {collection.count()} chunks.")
+    print(f"[4/4] Completed! Collection '{settings.CHROMA_COLLECTION_NAME}' now holds {collection.count()} chunks.", flush=True)
 
 
 if __name__ == "__main__":

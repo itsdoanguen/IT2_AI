@@ -8,7 +8,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.schemas import HealthResponse, VectorSearchRequest, VectorSearchResponse
+from app.guardrail import evaluate_query
+from app.schemas import (
+    GuardrailRequest,
+    GuardrailResponse,
+    HealthResponse,
+    VectorSearchRequest,
+    VectorSearchResponse,
+)
 from app.vector_store import VectorStoreService
 
 logger = logging.getLogger("it2_ai")
@@ -62,9 +69,45 @@ def create_app(vector_store: Optional[VectorStoreService] = None) -> FastAPI:
             embedding_model=settings.EMBEDDING_MODEL,
         )
 
+    @application.post("/api/guardrail", response_model=GuardrailResponse, tags=["Guardrail"])
+    @application.post("/api/vector/guardrail", response_model=GuardrailResponse, tags=["Guardrail"], include_in_schema=False)
+    def check_guardrail(payload: GuardrailRequest) -> GuardrailResponse:
+        decision = evaluate_query(payload.query)
+        return GuardrailResponse(
+            query=payload.query,
+            allowed=decision.allowed,
+            intent=decision.intent,
+            category=decision.category,
+            reason=decision.reason,
+            refusal_message=decision.refusal_message,
+            latency_ms=decision.latency_ms,
+        )
+
     @application.post("/api/vector/search", response_model=VectorSearchResponse, tags=["Vector Search"])
     @application.post("/api/search", response_model=VectorSearchResponse, tags=["Vector Search"], include_in_schema=True)
     def vector_search(payload: VectorSearchRequest, request: Request) -> VectorSearchResponse:
+        if payload.check_guardrail:
+            decision = evaluate_query(payload.query)
+            if not decision.allowed:
+                logger.info(
+                    "Guardrail blocked query (%s, %.2fms): %r",
+                    decision.category,
+                    decision.latency_ms,
+                    payload.query,
+                )
+                return VectorSearchResponse(
+                    query=payload.query,
+                    top_k=payload.top_k,
+                    total_found=0,
+                    embedding_model=settings.EMBEDDING_MODEL,
+                    context="",
+                    results=[],
+                    blocked=True,
+                    guardrail_category=decision.category,
+                    guardrail_reason=decision.reason,
+                    refusal_message=decision.refusal_message,
+                )
+
         active_store: VectorStoreService = request.app.state.vector_store
         try:
             results = active_store.search(
